@@ -1,0 +1,4 @@
+torch
+PyQt6
+sentencepiece
+numpy
