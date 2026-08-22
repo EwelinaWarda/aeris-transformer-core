@@ -51,10 +51,6 @@ Aeris\_2.0/
 
 │   └── sample\_data.txt       # Przykładowy zbiór danych treningowych
 
-├── model/
-
-│   └── aeris\_model.pt        # Wagi wyuczonego modelu (lokalnie)
-
 ├── .gitignore                # Reguły wykluczania dużych wag i plików cache
 
 ├── aeris\_gui.py              # Wielowątkowy interfejs graficzny PyQt
