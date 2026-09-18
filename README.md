@@ -1,4 +1,4 @@
-\# Aeris – Autorski Lokalny Model Językowy i Interfejs GUI
+# Aeris – Autorski Lokalny Model Językowy i Interfejs GUI
 
 
 
@@ -11,7 +11,7 @@ Projekt obejmuje autoregresyjną pętlę generowania tekstu, zoptymalizowany pip
 
 
 
-\## Główne Cechy
+## Główne Cechy
 
 
 
@@ -39,37 +39,29 @@ Projekt obejmuje autoregresyjną pętlę generowania tekstu, zoptymalizowany pip
 
 
 
-\## Struktura Projektu
+## Struktura Projektu
 
 
 
 ```text
-
-Aeris\_2.0/
-
+aeris-transformer-core/
 ├── data/
-
-│   └── sample\_data.txt       # Przykładowy zbiór danych treningowych
-
-├── .gitignore                # Reguły wykluczania dużych wag i plików cache
-
-├── aeris\_gui.py              # Wielowątkowy interfejs graficzny PyQt
-
-├── aeris\_tokenizer\_32k.model # Model tokenizera SentencePiece
-
-├── aeris\_tokenizer\_32k.vocab # Słownik tokenizera SentencePiece
-
-├── config.py                 # Konfiguracja hiperparametrów i wymiarów modelu
-
-├── embedding.py              # Moduł wektorowania tokenów i pozycji (Embeddings)
-
-├── model.py                  # Architektura dekodera Transformera (Self-Attention i MLP)
-
-├── README.md                 # Dokumentacja projektu
-
-├── requirements.txt          # Zależności i wymagane biblioteki
-
-└── train\_full.py             # Zoptymalizowany skrypt treningowy
+│   └── sample_dataset.txt        # Przykładowy zbiór danych do pre-trainingu
+├── data_adapt/
+│   └── sample_adapt.txt          # Próbka danych do adaptacji dziedzinowej
+├── model/
+│   └── aeris_model.pt            # Wagi wyuczonego modelu (lokalnie, wykluczone z Git)
+├── .gitignore                    # Reguły wykluczania dużych wag i plików cache
+├── aeris_gui.py                  # Wielowątkowy interfejs graficzny PyQt
+├── aeris_tokenizer_32k.model     # Model tokenizera SentencePiece
+├── aeris_tokenizer_32k.vocab     # Słownik tokenizera SentencePiece
+├── config.py                     # Konfiguracja hiperparametrów i wymiarów modelu
+├── embedding.py                  # Moduł wektorowania tokenów i pozycji (Embeddings)
+├── model.py                      # Architektura dekodera Transformera (Self-Attention i MLP)
+├── README.md                     # Dokumentacja projektu
+├── requirements.txt              # Zależności i wymagane biblioteki
+├── train_full.py                 # Główny skrypt treningowy (pre-training)
+└── train_adapt.py                # Skrypt adaptacji dziedzinowej (continual training)
 
 
 
@@ -79,7 +71,7 @@ Aeris\_2.0/
 
 
 
-\## Przegląd Architektury
+## Przegląd Architektury
 
 
 
@@ -101,11 +93,11 @@ Aeris\_2.0/
 
 
 
-\## Uruchomienie Projektu
+## Uruchomienie Projektu
 
 
 
-1\. Wymagania wstępne
+1. Wymagania wstępne
 
 Upewnij się, że masz zainstalowanego Pythona 3.10+ oraz aktywowane środowisko wirtualne: 
 
@@ -115,11 +107,11 @@ Upewnij się, że masz zainstalowanego Pythona 3.10+ oraz aktywowane środowisko
 
 python -m venv venv
 
-\# W systemie Windows:
+# W systemie Windows:
 
 .\\venv\\Scripts\\activate
 
-\# W systemie Linux/macOS:
+# W systemie Linux/macOS:
 
 source venv/bin/activate
 
@@ -129,7 +121,7 @@ source venv/bin/activate
 
 
 
-2\. Instalacja zależności
+2. Instalacja zależności
 
 Zainstaluj wymagane pakiety:
 
@@ -145,7 +137,7 @@ pip install -r requirements.txt
 
 
 
-3\. Trening / Fine-Tuning
+3. Trening bazowy (Pre-training)
 
 Aby przetestować proces uczenia na przykładowych danych:
 
@@ -153,7 +145,7 @@ Aby przetestować proces uczenia na przykładowych danych:
 
 ```bash
 
-python train\_full.py
+python train_full.py
 
 
 
@@ -161,7 +153,20 @@ python train\_full.py
 
 
 
-4\. Uruchomienie Aplikacji Desktopowej
+4. Dalsze douczanie (Adaptacja dziedzinowa)
+
+
+```bash
+
+python train_adapt.py
+
+
+
+```
+
+
+
+5. Uruchomienie Aplikacji Desktopowej
 
 Uruchomienie graficznego interfejsu użytkownika:
 
@@ -169,7 +174,7 @@ Uruchomienie graficznego interfejsu użytkownika:
 
 ```bash
 
-python aeris\_gui.py
+python aeris_gui.py
 
 
 
@@ -177,7 +182,7 @@ python aeris\_gui.py
 
 
 
-\## Dalszy Rozwój (Roadmap)
+## Dalszy Rozwój (Roadmap)
 
 
 
@@ -190,4 +195,10 @@ python aeris\_gui.py
 
 
 * Pętla Agentowa: Rozbudowa architektury w stronę autonomicznego agenta realizującego wieloetapowe zadania decyzyjne.
+
+
+* Optymalizacja Pod Urządzenia Brzegowe (Edge AI): Kwantyzacja wag (int8 / int4) oraz eksport do formatu ONNX / TensorRT w celu redukcji narzutu pamięciowego.
+
+
+* Integracja z Platformami Robotyki: Wykorzystanie zoptymalizowanego modelu jako lokalnego modułu decyzyjno-dialogowego na dedykowanym sprzęcie wbudowanym.
 
