@@ -24,20 +24,17 @@ class TransformerBlock(nn.Module):
         self.activation = nn.GELU()
 
     def forward(self, x, attn_mask=None):
-        # 1. Pre-LayerNorm dla Attention
         norm_x = self.norm1(x)
         attn_output, _ = self.self_attn(
             norm_x, norm_x, norm_x, 
             attn_mask=attn_mask,
-            is_causal=(attn_mask is None) # Używamy is_causal tylko gdy maska nie jest podana
+            is_causal=False
         )
         x = x + self.dropout(attn_output)
 
-        # 2. Pre-LayerNorm dla FeedForward
         norm_x2 = self.norm2(x)
         ff_output = self.linear2(self.dropout(self.activation(self.linear1(norm_x2))))
         x = x + self.dropout(ff_output)
-
         return x
 
 
@@ -82,9 +79,8 @@ class AERISTransformerModel(nn.Module):
         x = self.embedding(x)  # [B, T, C]
         T = x.size(1)
         
-        # Generujemy czytelną dla PyTorcha maskę boolowską (True = zablokowane)
-        # zapobiega błędom RuntimeError w PyTorch 2.x
-        causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
+        # Prawidłowa trójkątna maska Causal Mask (minus nieskończoność na górnym trójkącie)
+        causal_mask = torch.triu(torch.full((T, T), float('-inf'), device=x.device), diagonal=1)
         
         x = self.transformer(x, attn_mask=causal_mask)
         return self.output_head(x)
