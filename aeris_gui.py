@@ -1,11 +1,9 @@
 import sys
 import os
+import subprocess
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
-
-import glob
-from datetime import datetime
 
 import sentencepiece as spm
 import torch
@@ -20,142 +18,140 @@ from PyQt5.QtGui import QPalette, QColor
 from model import AERISTransformerModel
 from config import Config
 
-print("🚀 Inicjalizacja czystego środowiska Aerisa (On-Demand RAG)...")
-
 # --- ŚCIEŻKI SYSTEMOWE ---
-TOKENIZER_PATH = os.path.abspath("./aeris_tokenizer_32k.model")
-MODEL_PATH = os.path.abspath("./model/aeris_model.pt")
-LOG_PATH = os.path.abspath("./logs/chat_log.txt")
-
-MEMORY_DIR = os.path.abspath("./memory/")
-WORLD_DIR = os.path.abspath("./world/")
-SYMBOLS_DIR = os.path.abspath("./symbols/")
-STUDY_DIR = os.path.abspath("./study/")
-LEARN_DIR = os.path.abspath("./learn/")
-
-EDITABLE_DIRS = ["config", "learn", "logs", "memory", "pulpit", "study", "symbols", "voice", "world"]
-
-for folder in [MEMORY_DIR, WORLD_DIR, SYMBOLS_DIR, STUDY_DIR, LEARN_DIR, os.path.abspath("./logs")]:
-    os.makedirs(folder, exist_ok=True)
-
-# --- ŁADOWANIE TOKENIZERA I MODELU ---
-GLOBAL_SP = spm.SentencePieceProcessor()
-GLOBAL_SP.load(TOKENIZER_PATH)
-
-config = Config()
-GLOBAL_MODEL = AERISTransformerModel(config)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TOKENIZER_PATH = os.path.join(BASE_DIR, "aeris_tokenizer_32k.model")
+MODEL_PATH = os.path.join(BASE_DIR, "model", "aeris_model.pt")
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-ACTUAL_MODEL_PATH = MODEL_PATH if os.path.exists(MODEL_PATH) else os.path.abspath("./model/best.pt")
 
-checkpoint = torch.load(ACTUAL_MODEL_PATH, map_location=DEVICE)
-state_dict = checkpoint["model_state"] if isinstance(checkpoint, dict) and "model_state" in checkpoint else checkpoint
-GLOBAL_MODEL.load_state_dict(state_dict, strict=False)
-GLOBAL_MODEL.to(DEVICE)
-GLOBAL_MODEL.eval()
+# --- ŁADOWANIE TOKENIZERA I MODELU ---
+GLOBAL_SP = None
+GLOBAL_MODEL = None
 
-# --- SPIS TREŚCI FOLDERÓW (ZAMIAST CAŁYCH PLIKÓW) ---
-def get_file_index():
-    files_list = []
-    for folder_name, folder_path in [("WORLD", WORLD_DIR), ("MEMORY", MEMORY_DIR)]:
-        for f in glob.glob(os.path.join(folder_path, "*.txt")):
-            files_list.append(f"{folder_name}/{os.path.basename(f)}")
-    
-    if not files_list:
-        return "Brak plików w pamięci."
-    return ", ".join(files_list)
+if os.path.exists(TOKENIZER_PATH):
+    GLOBAL_SP = spm.SentencePieceProcessor()
+    GLOBAL_SP.load(TOKENIZER_PATH)
 
-# --- FUNKCJA ODCZYTU PLIKU NA ŻĄDANIE ---
-def read_specific_file(file_name_keyword):
-    for folder_path in [WORLD_DIR, MEMORY_DIR, SYMBOLS_DIR]:
-        for filepath in glob.glob(os.path.join(folder_path, "*.txt")):
-            if file_name_keyword.lower() in os.path.basename(filepath).lower():
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        return f.read().strip()
-                except Exception:
-                    pass
-    return None
+if os.path.exists(MODEL_PATH) and GLOBAL_SP is not None:
+    config = Config()
+    GLOBAL_MODEL = AERISTransformerModel(config)
+    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+    state_dict = checkpoint["model_state"] if isinstance(checkpoint, dict) and "model_state" in checkpoint else checkpoint
+    GLOBAL_MODEL.load_state_dict(state_dict, strict=False)
+    GLOBAL_MODEL.to(DEVICE)
+    GLOBAL_MODEL.eval()
 
 # --- WĄTEK GENEROWANIA ---
 class ModelWorker(QThread):
     response_ready = pyqtSignal(str)
 
-    def __init__(self, user_text):
+    def __init__(self, chat_history):
         super().__init__()
-        self.user_text = user_text
+        self.chat_history = chat_history
 
     @torch.no_grad()
     def run(self):
+        if GLOBAL_MODEL is None or GLOBAL_SP is None:
+            self.response_ready.emit("Błąd: Model lub tokenizer nie został załadowany.")
+            return
+
         try:
-            file_index = get_file_index()
+            # 1. Budowanie promptu z wieloturowej historii dialogu
+            formatted_dialogue = []
+            for role, text in self.chat_history:
+                formatted_dialogue.append(f"{role}: {text}")
             
-            prompt = f"""Wiedza z pamięci: {file_index}
+            full_prompt = "\n".join(formatted_dialogue) + "\nAeris:"
+            input_ids = GLOBAL_SP.encode(full_prompt, out_type=int)
+            
+            # Dynamiczny rozmiar kontekstu z configu z rezerwą 150 tokenów na generację
+            max_seq_len = getattr(GLOBAL_MODEL.config, 'max_seq_len', getattr(GLOBAL_MODEL.config, 'block_size', 1024))
+            max_context = max_seq_len - 150
+            if len(input_ids) > max_context:
+                input_ids = input_ids[-max_context:]
 
-Nera: {self.user_text}
-Aeris:"""
-
-            input_ids = GLOBAL_SP.encode(prompt, out_type=int)
             x = torch.tensor([input_ids], dtype=torch.long, device=DEVICE)
-            
-            block_size = getattr(GLOBAL_MODEL.config, 'block_size', getattr(GLOBAL_MODEL.config, 'seq_len', 256))
             generated = []
-            max_new_tokens = 90  # Płynny, zwięzły dystans na wypowiedź
+            max_new_tokens = 100
+            
+            temperature = 0.52
+            top_k = 28
+            top_p = 0.82
+            repetition_penalty = 1.25
 
             for _ in range(max_new_tokens):
-                x_cond = x[:, -block_size:] if x.size(1) > block_size else x
+                x_cond = x if x.size(1) <= max_seq_len else x[:, -max_seq_len:]
                 logits = GLOBAL_MODEL(x_cond)
-                
-                # Temperatura 0.38 – stabilna składnia i wysoka płynność językowa
-                logits = logits[:, -1, :] / 0.38 
-                
-                # Kara za powtórzenia (1.45) zapobiega zapętlaniu słów i fraz
-                for token_id in set(generated):
-                    logits[0, token_id] /= 1.45
-                
-                # Top-P Nucleus Sampling (0.80) – odcina przypadkowe, niepasujące tokeny
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
-                
-                sorted_indices_to_remove = cumulative_probs > 0.80
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-                
-                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                logits[indices_to_remove] = -float('Inf')
-                
-                probs = torch.softmax(logits, dim=-1)
+                next_logits = logits[:, -1, :] / max(temperature, 1e-5)
+
+                for token_id in set(generated + input_ids[-20:]):
+                    if next_logits[0, token_id] > 0:
+                        next_logits[0, token_id] /= repetition_penalty
+                    else:
+                        next_logits[0, token_id] *= repetition_penalty
+
+                if top_k > 0:
+                    v, _ = torch.topk(next_logits, min(top_k, next_logits.size(-1)))
+                    next_logits[next_logits < v[:, [-1]]] = -float('Inf')
+
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_logits, descending=True)
+                    cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                    next_logits[indices_to_remove] = -float('Inf')
+
+                probs = torch.softmax(next_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
-                
                 token_id = next_token.item()
+
                 if token_id == GLOBAL_SP.eos_id():
                     break
-                    
+
                 x = torch.cat((x, next_token), dim=1)
                 generated.append(token_id)
-                
+
                 text_so_far = GLOBAL_SP.decode(generated)
-                if "Nera:" in text_so_far:
+                if "\nUżytkownik:" in text_so_far or "<Użytkownik>:" in text_so_far:
                     break
 
-            # Dekodowanie odpowiedzi
-            response_text = GLOBAL_SP.decode(generated).strip()
-            if "Nera:" in response_text:
-                response_text = response_text.split("Nera:")[0].strip()
+            raw_text = GLOBAL_SP.decode(generated).strip()
+            
+            # Odcięcie ewentualnych halucynowanych wypowiedzi użytkownika
+            for tag in ["\nUżytkownik:", "<Użytkownik>:", "Użytkownik:"]:
+                if tag in raw_text:
+                    raw_text = raw_text.split(tag)[0].strip()
 
-            # Czyszczenie ewentualnych wielokrotnych spacji po obróbce
+            # Usunięcie powtórzonych prefiksów z początku odpowiedzi
+            while raw_text.startswith("Aeris:") or raw_text.startswith("<Aeris>:"):
+                raw_text = raw_text.replace("Aeris:", "", 1).replace("<Aeris>:", "", 1).strip()
+
+            response_text = raw_text.rstrip('”"„')
             response_text = " ".join(response_text.split())
+            
+            # Domykanie do logicznego końca zdania
+            valid_ends = ('.', '!', '?', '…', ':)')
+            if not response_text.endswith(valid_ends):
+                last_punct = max(response_text.rfind('.'), response_text.rfind('!'), response_text.rfind('?'))
+                if last_punct != -1:
+                    response_text = response_text[:last_punct+1]
 
             self.response_ready.emit(response_text)
 
         except Exception as e:
             self.response_ready.emit(f"Wystąpił błąd podczas generowania: {str(e)}")
+
 # --- OKNO APLIKACJI ---
 class AerisGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Aeris – Środowisko Czyste v3.0")
+        self.setWindowTitle("Aeris – Interfejs Dialogowy")
         self.resize(700, 600)
+
+        self.chat_history = []  # Pamięć kontekstowa bieżącej sesji
 
         palette = QPalette()
         palette.setColor(QPalette.Window, QColor(20, 20, 20))
@@ -165,18 +161,20 @@ class AerisGUI(QWidget):
         self.setPalette(palette)
 
         layout = QVBoxLayout()
-        self.status_label = QLabel("🟢 Aeris gotowy – Czysta przestrzeń.")
-        self.status_label.setStyleSheet("color: #00ff75; font-weight: bold; margin-bottom: 5px;")
+        status_text = "🟢 Aeris gotowy do rozmowy." if GLOBAL_MODEL is not None else "⚠️ Brak wag modelu w folderze model/."
+        status_color = "#00ff75" if GLOBAL_MODEL is not None else "#ffaa00"
+        self.status_label = QLabel(status_text)
+        self.status_label.setStyleSheet(f"color: {status_color}; font-weight: bold; margin-bottom: 5px;")
         layout.addWidget(self.status_label)
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.append("=== SYSTEM OPERACYJNY AERISA (CZYSTY KONTEKST) ===\n")
+        self.output.append("=== AERIS TRANSFORMER – LOKALNY INTERFEJS ===\n")
         layout.addWidget(self.output)
 
         hbox = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Napisz do Aerisa...")
+        self.input.setPlaceholderText("Napisz wiadomość...")
         self.input.returnPressed.connect(self.handle_input)
         hbox.addWidget(self.input)
 
@@ -185,9 +183,9 @@ class AerisGUI(QWidget):
         hbox.addWidget(self.send_button)
         layout.addLayout(hbox)
 
-        coop_btn = QPushButton("📁 Przeglądaj Pliki Pamięci / Projektu")
-        coop_btn.clicked.connect(self.handle_coop)
-        layout.addWidget(coop_btn)
+        file_btn = QPushButton("📁 Otwórz plik danych / projektu")
+        file_btn.clicked.connect(self.handle_open_file)
+        layout.addWidget(file_btn)
 
         self.setLayout(layout)
         self.worker = None
@@ -197,16 +195,23 @@ class AerisGUI(QWidget):
         if not text:
             return
 
+        if GLOBAL_MODEL is None:
+            QMessageBox.warning(self, "Brak modelu", "Nie znaleziono pliku wag 'model/aeris_model.pt'. Umieść wagi w odpowiednim katalogu.")
+            return
+
         self.send_button.setEnabled(False)
         self.input.setEnabled(False)
-        self.output.append(f"<b>Nera:</b> {text}")
+        self.output.append(f"<b>Użytkownik:</b> {text}")
         self.input.clear()
         self.status_label.setText("⏳ Aeris przetwarza wypowiedź...")
+
+        # Zapis do historii dialogu
+        self.chat_history.append(("Użytkownik", text))
 
         if self.worker is not None and self.worker.isRunning():
             self.worker.terminate()
 
-        self.worker = ModelWorker(text)
+        self.worker = ModelWorker(self.chat_history)
         self.worker.response_ready.connect(self.on_response_ready)
         self.worker.start()
 
@@ -217,21 +222,19 @@ class AerisGUI(QWidget):
         self.input.setEnabled(True)
         self.input.setFocus()
 
-        try:
-            with open(LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(f"Nera: {self.worker.user_text}\nAeris: {response}\n\n")
-        except Exception as e:
-            print(f"Błąd zapisu logu: {e}")
+        # Zapis odpowiedzi do historii dialogu
+        self.chat_history.append(("Aeris", response))
 
-    def handle_coop(self):
-        start_path = os.getcwd()
-        dialog_path = QFileDialog.getOpenFileName(self, "Wybierz plik pamięci do podglądu", start_path, "Pliki *.txt *.py")
-        if dialog_path[0]:
-            file_path = dialog_path[0]
-            if any(folder in file_path for folder in EDITABLE_DIRS):
-                os.system(f'notepad "{file_path}"')
+    def handle_open_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Wybierz plik projektu", BASE_DIR, "Pliki tekstowe i skrypty (*.txt *.py *.md)")
+        if file_path:
+            # Bezpieczne otwarcie pliku w domyślnym programie systemowym
+            if sys.platform.startswith('win'):
+                os.startfile(file_path)
+            elif sys.platform.startswith('darwin'):
+                subprocess.call(('open', file_path))
             else:
-                QMessageBox.warning(self, "Brak dostępu", "Ten folder nie leży w przestrzeni operacyjnej Aerisa.")
+                subprocess.call(('xdg-open', file_path))
 
 if __name__ == "__main__":
     try:
