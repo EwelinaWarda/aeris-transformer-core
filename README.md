@@ -15,7 +15,7 @@ Projekt obejmuje autoregresyjną pętlę generowania tekstu, zoptymalizowany pip
 
 
 
-* Własna Architektura Transformera: Zbudowana na modułach PyTorch z wykorzystaniem mechanizmu Multi-Head Self-Attention, maskowania kauzalnego, stabilizacji Pre-LayerNorm oraz skalowanych wektorów zanurzeń (embeddings).
+* Własna Architektura Transformera: Zbudowana na modułach PyTorch z wykorzystaniem mechanizmu Multi-Head Self-Attention, maskowania kauzalnego, stabilizacji Pre-LayerNorm oraz skalowanych embeddingów.
 
 
 
@@ -23,7 +23,11 @@ Projekt obejmuje autoregresyjną pętlę generowania tekstu, zoptymalizowany pip
 
 
 
-* Wydajny Proces Uczenia: Pętla treningowa wspierająca akumulację gradientów (gradient accumulation), kernele FlashAttention, optymalizator AdamW z selektywnym wykluczeniem parametrów bez wag (weight decay exclusion) oraz kosinusowy harmonogram uczenia (Cosine Annealing).
+* Wieloturowa Pamięć Kontekstowa: Dynamiczne buforowanie historii dialogu w ramach okna kontekstowego (do 1024 tokenów) z automatycznym przycinaniem najstarszych tur i rezerwacją bufora na generację.
+
+
+
+* Wydajny Proces Uczenia: Pętla treningowa wspierająca akumulację gradientów (gradient accumulation), kernele FlashAttention, optymalizator AdamW z selektywnym wykluczeniem parametrów 1D (biasów i warstw normalizacji) z Weight Decay oraz kosinusowy harmonogram uczenia (Cosine Annealing).
 
 
 
@@ -83,7 +87,7 @@ aeris-transformer-core/
 
 
 
-* Warstwy Feed-Forward: Gęste warstwy rozszerzające z nieliniowymi funkcjami aktywacji i połączeniami rezydualnymi (residual connections).  
+* Warstwy Feed-Forward (MLP): Warstwy liniowe z nieliniowymi funkcjami aktywacji i połączeniami rezydualnymi (residual connections)  
 
 
 
